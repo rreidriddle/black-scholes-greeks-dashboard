@@ -2,7 +2,7 @@
 
 A live options analytics dashboard for SPY, built on the Schwab API. Computes and visualizes second-order Greeks (GEX, VannEX, CharmEX), a live Treasury yield curve with bond futures yields, macro regime classification, and an implied volatility smile. Includes a historical backtest module for replaying any past session against that day's opening GEX snapshot.
 
-![Options Greeks Dashboard](dashboard.png)
+![Options Greeks Dashboard](readmedashboard.png)
 
 ---
 

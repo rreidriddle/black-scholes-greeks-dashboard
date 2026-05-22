@@ -64,8 +64,7 @@ def parse_chain(chain: dict,
                 exp_date = exp_key.split(":")[0]
                 dte      = float(exp_key.split(":")[1])
             except: continue
-            T = dte / 365
-            if T <= 0: continue
+            T = max(dte, 0.5) / 365
             bucket = get_dte_bucket(dte)
             for ks, contracts in strikes.items():
                 K = float(ks)

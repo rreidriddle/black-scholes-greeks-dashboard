@@ -102,8 +102,8 @@ def generate_demo_chain(spot):
 
 
 def main():
-    import os
-    demo = (os.environ.get("SCHWAB_CLIENT_ID", "YOUR_CLIENT_ID") == "YOUR_CLIENT_ID")
+    import os, sys
+    demo = "--demo" in sys.argv or (os.environ.get("SCHWAB_CLIENT_ID", "YOUR_CLIENT_ID") == "YOUR_CLIENT_ID")
 
     today_curve    = None
     yesterday_curve = None

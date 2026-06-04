@@ -47,7 +47,7 @@ def filter_df(df, spot, dte_label="0-45", expiry="ALL", strike_pct=0.05):
     out     = df.copy()
     max_dte = DTE_FILTERS.get(dte_label, 45)
     if dte_label == "0DTE":
-        out = out[out["dte"] <= 1]
+        out = out[out["dte"] < 1]
     else:
         out = out[out["dte"] <= max_dte]
     if expiry != "ALL" and "expiry" in out.columns:
@@ -762,7 +762,7 @@ def launch_dashboard(initial_data, demo=False, vix_data=None,
                     surface     = db.get_gex_surface(SYMBOL, ts)
 
                     if surface is not None and not surface.empty:
-                        sf = surface[surface["dte"] <= 1] \
+                        sf = surface[surface["dte"] < 1] \
                              if dte_lbl == "0DTE" \
                              else surface[surface["dte"] <= 45]
 

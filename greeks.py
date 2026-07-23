@@ -9,7 +9,11 @@ import numpy as np
 import pandas as pd
 from scipy.stats import norm
 
-RISK_FREE  = 0.045
+RISK_FREE  = 0.045  # fallback; updated at startup from live Treasury 3m yield
+
+def set_risk_free_rate(r: float) -> None:
+    global RISK_FREE
+    RISK_FREE = round(r, 6)
 STRIKE_PCT = 0.08
 
 DTE_BUCKETS = [
@@ -49,8 +53,10 @@ def get_dte_bucket(dte: float) -> str:
 # ── Chain parsing ──────────────────────────────────────────────────────────────
 
 def parse_chain(chain: dict,
-                r: float = RISK_FREE,
+                r: float | None = None,
                 strike_pct: float = STRIKE_PCT) -> pd.DataFrame:
+    if r is None:
+        r = RISK_FREE
     S    = chain["underlyingPrice"]
     rows = []
 

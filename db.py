@@ -288,6 +288,212 @@ def get_gex_surface(symbol: str,
         conn.close()
 
 
+# ── Read-write connection ──────────────────────────────────────────────────────
+
+def get_rw_connection(path: str = None) -> sqlite3.Connection | None:
+    db = path or DB_PATH
+    try:
+        conn = sqlite3.connect(db, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
+    except Exception as e:
+        warnings.warn(f"db.py: could not open rw connection: {e}", stacklevel=2)
+        return None
+
+# ── Price bar cache ────────────────────────────────────────────────────────────
+
+def init_price_cache() -> None:
+    """Create price_bars and hist_volume_cache tables if they don't exist."""
+    conn = get_rw_connection()
+    if conn is None:
+        return
+    try:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS price_bars (
+                symbol  TEXT NOT NULL,
+                date    TEXT NOT NULL,
+                ts      TEXT NOT NULL,
+                open    REAL,
+                high    REAL,
+                low     REAL,
+                close   REAL,
+                volume  INTEGER,
+                PRIMARY KEY (symbol, date, ts)
+            );
+            CREATE TABLE IF NOT EXISTS hist_volume_cache (
+                symbol     TEXT NOT NULL,
+                date       TEXT NOT NULL,
+                volume     INTEGER,
+                cached_on  TEXT NOT NULL,
+                PRIMARY KEY (symbol, date)
+            );
+        """)
+        conn.commit()
+    except Exception as e:
+        warnings.warn(f"db.py init_price_cache: {e}", stacklevel=2)
+    finally:
+        conn.close()
+
+
+def get_cached_bars(symbol: str, date: str) -> pd.DataFrame | None:
+    """
+    Return 1-min bars for symbol+date from price_bars, or None if not found.
+    Returns DataFrame with UTC DatetimeIndex and columns Open/High/Low/Close/Volume.
+    """
+    conn = get_connection()
+    if conn is None:
+        return None
+    try:
+        df = pd.read_sql_query(
+            "SELECT ts, open, high, low, close, volume FROM price_bars "
+            "WHERE symbol = ? AND date = ? ORDER BY ts",
+            conn,
+            params=(symbol, date),
+        )
+        if df.empty:
+            return None
+        df = df.rename(columns={
+            "ts":     "datetime",
+            "open":   "Open",
+            "high":   "High",
+            "low":    "Low",
+            "close":  "Close",
+            "volume": "Volume",
+        })
+        df["datetime"] = pd.to_datetime(df["datetime"], utc=True)
+        df = df.set_index("datetime").sort_index()
+        return df
+    except Exception as e:
+        warnings.warn(f"db.py get_cached_bars: {e}", stacklevel=2)
+        return None
+    finally:
+        conn.close()
+
+
+def save_bars(symbol: str, date: str, df: pd.DataFrame) -> None:
+    """Write 1-min OHLCV DataFrame rows to price_bars using INSERT OR REPLACE."""
+    if df is None or df.empty:
+        return
+    conn = get_rw_connection()
+    if conn is None:
+        return
+    try:
+        rows = []
+        for ts, row in df.iterrows():
+            ts_str = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
+            rows.append((
+                symbol,
+                date,
+                ts_str,
+                row.get("Open"),
+                row.get("High"),
+                row.get("Low"),
+                row.get("Close"),
+                int(row["Volume"]) if pd.notna(row.get("Volume")) else None,
+            ))
+        conn.executemany(
+            "INSERT OR REPLACE INTO price_bars "
+            "(symbol, date, ts, open, high, low, close, volume) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        conn.commit()
+    except Exception as e:
+        warnings.warn(f"db.py save_bars: {e}", stacklevel=2)
+    finally:
+        conn.close()
+
+
+def get_cached_hist_volume(symbol: str) -> pd.DataFrame | None:
+    """
+    Return hist_volume_cache rows for symbol where cached_on = today.
+    Returns DataFrame with date index and Volume column, or None if not found/stale.
+    """
+    conn = get_connection()
+    if conn is None:
+        return None
+    try:
+        today_str = datetime.date.today().isoformat()
+        df = pd.read_sql_query(
+            "SELECT date, volume FROM hist_volume_cache "
+            "WHERE symbol = ? AND cached_on = ? ORDER BY date",
+            conn,
+            params=(symbol, today_str),
+        )
+        if df.empty:
+            return None
+        df = df.rename(columns={"volume": "Volume"})
+        df["date"] = pd.to_datetime(df["date"]).dt.date
+        df = df.set_index("date")
+        return df
+    except Exception as e:
+        warnings.warn(f"db.py get_cached_hist_volume: {e}", stacklevel=2)
+        return None
+    finally:
+        conn.close()
+
+
+def save_hist_volume(symbol: str, df: pd.DataFrame) -> None:
+    """
+    Delete old hist_volume_cache rows for symbol, write new rows with cached_on = today.
+    df must have a date index and a Volume column.
+    """
+    if df is None or df.empty:
+        return
+    conn = get_rw_connection()
+    if conn is None:
+        return
+    try:
+        today_str = datetime.date.today().isoformat()
+        conn.execute(
+            "DELETE FROM hist_volume_cache WHERE symbol = ?", (symbol,)
+        )
+        rows = []
+        for idx, row in df.iterrows():
+            date_str = idx.isoformat() if hasattr(idx, "isoformat") else str(idx)
+            vol = int(row["Volume"]) if pd.notna(row.get("Volume")) else None
+            rows.append((symbol, date_str, vol, today_str))
+        conn.executemany(
+            "INSERT OR REPLACE INTO hist_volume_cache "
+            "(symbol, date, volume, cached_on) VALUES (?, ?, ?, ?)",
+            rows,
+        )
+        conn.commit()
+    except Exception as e:
+        warnings.warn(f"db.py save_hist_volume: {e}", stacklevel=2)
+    finally:
+        conn.close()
+
+
+def get_dates_missing_bars(symbol: str) -> list[str]:
+    """
+    Return list of YYYY-MM-DD date strings that exist in summary
+    but NOT in price_bars for symbol, excluding today.
+    """
+    conn = get_connection()
+    if conn is None:
+        return []
+    try:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT DATE(timestamp) FROM summary
+            WHERE symbol = ?
+              AND DATE(timestamp) < DATE('now')
+              AND DATE(timestamp) NOT IN (
+                  SELECT DISTINCT date FROM price_bars WHERE symbol = ?
+              )
+            ORDER BY 1
+            """,
+            (symbol, symbol),
+        ).fetchall()
+        return [row[0] for row in rows]
+    except Exception as e:
+        warnings.warn(f"db.py get_dates_missing_bars: {e}", stacklevel=2)
+        return []
+    finally:
+        conn.close()
+
+
 def get_session_summary(symbol: str,
                         start_date: str | datetime.date,
                         end_date:   str | datetime.date) -> pd.DataFrame:

@@ -372,6 +372,114 @@ def get_historical_volume(token: str,
     return pd.DataFrame()
 
 
+def fetch_1min_bars(token: str,
+                    symbol: str,
+                    date: datetime.date | str) -> pd.DataFrame:
+    """
+    Fetch 1-minute intraday bars for a single trading day.
+    Used for building the persistent price bar cache.
+    Returns DataFrame with UTC DatetimeIndex and OHLCV columns.
+    Returns empty DataFrame on any failure.
+    """
+    if isinstance(date, str):
+        date = datetime.date.fromisoformat(date)
+
+    start_ms = _date_to_ms(date, end_of_day=False)
+    end_ms   = _date_to_ms(date, end_of_day=True)
+
+    params = {
+        "symbol":        symbol,
+        "periodType":    "day",
+        "frequencyType": "minute",
+        "frequency":     1,
+        "startDate":     start_ms,
+        "endDate":       end_ms,
+        "needExtendedHoursData": "false",
+    }
+
+    for attempt in range(3):
+        try:
+            r = requests.get(
+                f"{SCHWAB_BASE}/pricehistory",
+                headers={"Authorization": f"Bearer {token}"},
+                params=params,
+                timeout=30,
+            )
+            r.raise_for_status()
+            df = _parse_candles(r.json())
+            if not df.empty:
+                df["session"]      = "selected"
+                df["trading_date"] = df.index.map(
+                    lambda ts: ts.astimezone(ET).date()
+                )
+            return df
+        except requests.exceptions.HTTPError:
+            if r.status_code in [429, 502, 503, 504] and attempt < 2:
+                w = (attempt + 1) * 3
+                print(f"  {r.status_code} on fetch_1min_bars {symbol} {date} "
+                      f"— retry in {w}s")
+                time.sleep(w)
+                continue
+            warnings.warn(
+                f"schwab_price fetch_1min_bars: HTTP {r.status_code} "
+                f"on {symbol} {date}: {r.text[:200]}",
+                stacklevel=2,
+            )
+            return pd.DataFrame()
+        except Exception as e:
+            warnings.warn(f"schwab_price fetch_1min_bars: {e}", stacklevel=2)
+            return pd.DataFrame()
+
+    return pd.DataFrame()
+
+
+def resample_bars(df: pd.DataFrame, frequency: str) -> pd.DataFrame:
+    """
+    Resample a 1-minute OHLCV DataFrame to the requested frequency.
+    If frequency == "1min" the original DataFrame is returned unchanged.
+    Supported frequencies: "1min", "5min", "10min", "15min", "30min".
+    """
+    if df is None or df.empty:
+        return df
+
+    if frequency == "1min":
+        return df
+
+    freq_map = {
+        "5min":  "5min",
+        "10min": "10min",
+        "15min": "15min",
+        "30min": "30min",
+    }
+    rule = freq_map.get(frequency)
+    if rule is None:
+        warnings.warn(
+            f"schwab_price resample_bars: unknown frequency '{frequency}'. "
+            f"Returning 1min data unchanged.",
+            stacklevel=2,
+        )
+        return df
+
+    # Preserve extra columns (session, trading_date) using first value per bucket
+    extra_cols = [c for c in df.columns
+                  if c not in ("Open", "High", "Low", "Close", "Volume")]
+
+    ohlcv = df[["Open", "High", "Low", "Close", "Volume"]].resample(rule).agg({
+        "Open":   "first",
+        "High":   "max",
+        "Low":    "min",
+        "Close":  "last",
+        "Volume": "sum",
+    })
+    ohlcv = ohlcv.dropna(subset=["Open"])
+
+    if extra_cols:
+        extras = df[extra_cols].resample(rule).first()
+        ohlcv  = ohlcv.join(extras, how="left")
+
+    return ohlcv
+
+
 def align_greeks_to_bars(bars: pd.DataFrame,
                          greeks: pd.DataFrame,
                          tolerance_minutes: int = 8) -> pd.DataFrame:

@@ -17,7 +17,7 @@ load_dotenv()
 import datetime
 import numpy as np
 
-from greeks  import parse_chain, STRIKE_PCT
+from greeks  import parse_chain, set_risk_free_rate, STRIKE_PCT
 import api   as api_mod
 import macro as macro_mod
 from ui.app  import launch_dashboard
@@ -124,8 +124,14 @@ def main():
         print("Fetching Treasury yield curve...")
         today_curve, yesterday_curve = macro_mod.fetch_yield_curves()
         if today_curve:
-            print(f"  Yield curve: {today_curve.get('date', '?')}  "
-                  f"10Y={today_curve.get('y10')}%  30Y={today_curve.get('y30')}%")
+            m3 = today_curve.get("m3")
+            if m3:
+                set_risk_free_rate(m3 / 100)
+                print(f"  Yield curve: {today_curve.get('date', '?')}  "
+                      f"3M={m3}%  10Y={today_curve.get('y10')}%  30Y={today_curve.get('y30')}%")
+            else:
+                print(f"  Yield curve: {today_curve.get('date', '?')}  "
+                      f"10Y={today_curve.get('y10')}%  30Y={today_curve.get('y30')}%")
         else:
             print("  Yield curve unavailable")
 

@@ -6,3 +6,9 @@ __pycache__/
 tokens.json
 backup/
 greeks_history.db
+.claude/
+CLAUDE.md
+*.db-shm
+*.db-wal
+*.db
+*.json

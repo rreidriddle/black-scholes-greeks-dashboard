@@ -704,7 +704,8 @@ def launch_dashboard(initial_data, demo=False, vix_data=None,
 
     # ── RENDER: BACKTEST ───────────────────────────────────────────────────────
 
-    _bt_fetch_lock = threading.Lock()
+    _bt_fetch_lock    = threading.Lock()
+    _prefetch_started = [False]  # list so inner functions can mutate it
 
     def render_backtest(*_):
         if demo:
@@ -791,12 +792,53 @@ def launch_dashboard(initial_data, demo=False, vix_data=None,
                             if "type" in sf.columns:
                                 surface_max_pain = _calc_max_pain(sf)
 
-                from auth import get_valid_access_token
-                token = get_valid_access_token(silent=True)
-                bars  = schwab_price.get_single_day_bars(
-                    token, SYMBOL, selected_date, frequency=frequency)
+                from db import (init_price_cache, get_cached_bars, save_bars,
+                               get_cached_hist_volume, save_hist_volume)
+                from schwab_price import resample_bars, fetch_1min_bars
 
-                hist_vol = schwab_price.get_historical_volume(token, SYMBOL)
+                # ── Price bars (cache-first) ───────────────────────────────
+                init_price_cache()
+
+                _token_fetched = [None]
+
+                def _get_token():
+                    if _token_fetched[0] is None:
+                        from auth import get_valid_access_token
+                        _token_fetched[0] = get_valid_access_token(silent=True)
+                    return _token_fetched[0]
+
+                if is_today:
+                    # Live data for today — never cache
+                    token = _get_token()
+                    bars  = schwab_price.get_single_day_bars(
+                        token, SYMBOL, selected_date, frequency=frequency)
+                else:
+                    cached = get_cached_bars(SYMBOL, selected_date_str)
+                    if cached is not None:
+                        bars = resample_bars(cached, frequency)
+                    else:
+                        token = _get_token()
+                        raw   = fetch_1min_bars(token, SYMBOL, selected_date_str)
+                        if not raw.empty:
+                            save_bars(SYMBOL, selected_date_str, raw)
+                        bars = resample_bars(raw, frequency) if not raw.empty \
+                               else pd.DataFrame()
+
+                # ── Historical volume (cache-first, today-scoped) ──────────
+                hist_vol = get_cached_hist_volume(SYMBOL)
+                if hist_vol is None:
+                    token    = _get_token()
+                    hv_raw   = schwab_price.get_historical_volume(token, SYMBOL)
+                    if not hv_raw.empty and "Volume" in hv_raw.columns:
+                        # Build a date-indexed Volume series to store
+                        hv_store = hv_raw[["Volume"]].copy()
+                        hv_store.index = hv_raw.index.map(
+                            lambda ts: ts.date()
+                        )
+                        save_hist_volume(SYMBOL, hv_store)
+                        hist_vol = hv_store
+                    else:
+                        hist_vol = pd.DataFrame()
                 vol_90th = None
                 vol_avg  = None
                 if not hist_vol.empty and "Volume" in hist_vol.columns:
@@ -902,6 +944,31 @@ def launch_dashboard(initial_data, demo=False, vix_data=None,
         tooltip.place_forget()
         render_macro()
 
+    def _start_bar_prefetch():
+        """Background thread: cache all missing 1-min bar dates from summary."""
+        def _run():
+            try:
+                import db as _db
+                import schwab_price as _sp
+                _db.init_price_cache()
+                missing = _db.get_dates_missing_bars(SYMBOL)
+                if not missing:
+                    return
+                from auth import get_valid_access_token
+                token = get_valid_access_token(silent=True)
+                total = len(missing)
+                for i, date in enumerate(missing, 1):
+                    root.after(0, lambda i=i, t=total:
+                               bt_status_var.set(f"Caching bars: {i}/{t}..."))
+                    bars = _sp.fetch_1min_bars(token, SYMBOL, date)
+                    if not bars.empty:
+                        _db.save_bars(SYMBOL, date, bars)
+                    time.sleep(0.5)
+                root.after(0, lambda: bt_status_var.set(""))
+            except Exception as e:
+                print(f"  Bar prefetch error: {e}")
+        threading.Thread(target=_run, daemon=True).start()
+
     def switch_to_backtest():
         active_tab.set("BACKTEST")
         backtest_btn.config(bg=C["btn_on"])
@@ -913,6 +980,9 @@ def launch_dashboard(initial_data, demo=False, vix_data=None,
         for w in charts_ctrl_widgets:
             w.pack_forget()
         tooltip.place_forget()
+        if not demo and not _prefetch_started[0]:
+            _prefetch_started[0] = True
+            _start_bar_prefetch()
         render_backtest()
 
     charts_btn.config(command=switch_to_charts)

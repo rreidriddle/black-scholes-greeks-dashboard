@@ -2,8 +2,6 @@
 
 A live options analytics dashboard for SPY, built on the Schwab API. Computes and visualizes second-order Greeks (GEX, VannEX, CharmEX), a live Treasury yield curve with bond futures yields, macro regime classification, and an implied volatility smile. Includes a historical backtest module for replaying any past session against that day's opening GEX snapshot.
 
-![Options Greeks Dashboard](readmedashboard.png)
-
 ---
 
 ## What It Does
@@ -28,6 +26,8 @@ A live options analytics dashboard for SPY, built on the Schwab API. Computes an
 
 ### CHARTS
 
+![Options Greeks Dashboard](readmedashboard.png)
+
 Three horizontal bar/curve panels side by side:
 
 - **GEX** — Gamma Exposure by strike. Call GEX (stabilizing) and put GEX (destabilizing) shown as stacked bars, with net GEX as an overlay line. Gamma flip, call wall, put wall, and max pain overlaid as vertical reference lines. Spot price annotated.
@@ -42,22 +42,11 @@ Control bar filters: **DTE** (0DTE / 0-7 / 0-21 / 0-45), **Expiry** (specific da
 
 **Regime Badge** — synthesizes bond market and options positioning into a single label.
 
-| Signal | What It Means |
-|--------|---------------|
-| STRONG BULLISH | Positive GEX + stable macro — dealers amplify upside |
-| WEAK BULLISH | Mild tailwind — some confirmation needed |
-| NEUTRAL | Conflicting signals — reduce size, wait |
-| WEAK BEARISH | Mild macro headwind — yields rising or bonds weakening |
-| STRONG BEARISH | Negative GEX + macro stress — dealers amplify downside |
-
 **Yield Curve** — U.S. Treasury curve plotted for today (solid) and yesterday (ghost line), making daily shifts immediately visible. Key spreads annotated:
 - **10Y-2Y** — primary recession indicator; turns red when inverted
 - **10Y-3M** — complementary signal; often leads the 10Y-2Y
 
-A red dashed line marks the 5% threshold on the 30Y yield — above it, Treasuries compete directly with equities for capital.
-
-**Data Table** — compact grid showing:
-- Treasury curve maturities: current yield + day-over-day change (green = fell, red = rose)
+**Data Table** — shown below yield curve:
 - Live bond futures: 3M ($IRX), 2Y (/ZT), 10Y (/ZN), 30Y (/ZB)
 - Computed spreads: 10Y-2Y and 10Y-3M with inversion warnings
 - TLT price and VIX with daily changes
@@ -66,10 +55,17 @@ A red dashed line marks the 5% threshold on the 30Y yield — above it, Treasuri
 
 ### BACKTEST
 
-Calendar-driven replay of any historical session. Select a past date to view:
-- That day's opening GEX snapshot (gamma flip, call wall, put wall, max pain)
-- Full open-to-close price action overlaid on the key levels
-- Volume panel below the price chart
+![Backtest Tab](backtest.png)
+
+Calendar driven replay of any historical session. Select a past date to view:
+- That day's opening GEX snapshot:
+    - Opening price indicated by blue dashed line
+    - Gamma flip indicated in gray at strike
+    - Select 0dte or 0-45dte bucket above
+- Full open-to-close SPY price action:
+    - Gamma flip indicated by blue dashed line
+    - Volume panel below the price chart
+    - Select time frame for candles above
 
 Requires `greeks_history.db` populated by the collector. See [schwab-greeks-historical-data](https://github.com/rreidriddle/schwab-greeks-historical-data).
 
@@ -134,7 +130,7 @@ python auth.py
 
 ### Demo Mode
 
-No credentials required. If `SCHWAB_CLIENT_ID` is not set (or left as the placeholder), the dashboard launches automatically with a synthetic SPY dataset modelled on real market structure — same Black-Scholes engine, realistic OI distribution and IV skew.
+No credentials required. If `SCHWAB_CLIENT_ID` is not set (or left as the placeholder), the dashboard launches automatically with a synthetic SPY dataset modeled on real market structure using same Black-Scholes engine, realistic OI distribution and IV skew.
 
 ```bash
 python main.py
